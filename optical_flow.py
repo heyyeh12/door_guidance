@@ -1,0 +1,128 @@
+#!/usr/bin/env python
+import sys
+import cv2
+import numpy as np
+
+## TUNING PARAMETERS ##
+dropped_frames = 3
+flow_threshold = 5
+optflow_params = dict( pyr_scale = 0.5,
+                         levels = 1,
+                         winsize = 5,
+                         iterations = 15,
+                         poly_n = 7, #or 5
+                         poly_sigma = 1.5,
+                         flags = 0) #or 1.1
+canny_params = dict( threshold1 = 50,
+                     threshold2 = 150,
+                     apertureSize = 3,
+                     L2gradient = True )
+hough_params = dict( rho = 1,
+                     theta = np.pi/180,
+                     threshold = 123,
+                     srn = 0,
+                     stn = 0
+                     )
+
+## DEFAULT OPTICAL FLOW VISUALIZATION ##
+def draw_flow(img, flow, step=16):
+    threshold = 10
+    h, w = img.shape[:2]
+    y, x = np.mgrid[step/2:h:step, step/2:w:step].reshape(2,-1)
+    fx, fy = flow[y,x].T
+    lines = np.vstack([x, y, x+fx, y+fy]).T.reshape(-1, 2, 2)
+    lines = np.int32(lines)
+    vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    cv2.polylines(vis, lines, 0, (0, 255, 0))
+    for (x1, y1), (x2, y2) in lines:
+        cv2.circle(vis, (x1, y1), 1, (0, 255, 0), -1)
+    return vis
+def warp_flow(img, flow):
+    h, w = flow.shape[:2]
+    flow = -flow
+    flow[:,:,0] += np.arange(w)
+    flow[:,:,1] += np.arange(h)[:,np.newaxis]
+    res = cv2.remap(img, flow, None, cv2.INTER_LINEAR)
+    return res
+def draw_hsv(flow):
+    h, w = flow.shape[:2]
+    fx, fy = flow[:,:,0], flow[:,:,1]
+    ang = np.arctan2(fy, fx) + np.pi
+    v = np.sqrt(fx*fx+fy*fy)
+    hsv = np.zeros((h, w, 3), np.uint8)
+    hsv[...,0] = ang*(180/np.pi/2)
+    hsv[...,1] = 255
+    hsv[...,2] = np.minimum(v*4, 255)
+    bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    return bgr
+
+## CUSTOMIZED FUNCTIONS ##
+def draw_hsv_thresh(flow, thresh):
+    h, w = flow.shape[:2]
+    hsv = np.zeros((h, w, 3), np.uint8)
+    mag, ang = cv2.cartToPolar(flow[...,0], flow[...,1])
+    hsv[...,0] = 0
+    hsv[...,1] = 0
+    hsv[...,2] = cv2.normalize(mag,None,0,100,cv2.NORM_MINMAX)
+    ret, hsv = cv2.threshold(hsv, thresh, 100, cv2.THRESH_BINARY)
+    bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    return bgr
+
+if __name__ == '__main__':
+
+    try:
+        data = "door_data/"+sys.argv[1]+".mov"
+    except:
+        data = 0
+
+    cap = cv2.VideoCapture(data)
+    ret, frame1 = cap.read()
+    prev = cv2.cvtColor(frame1,cv2.COLOR_BGR2GRAY)
+    
+    while(1):
+        
+        ## OPTICAL FLOW ##
+        for i in range(0, dropped_frames):
+            ret, frame2 = cap.read()
+        next = cv2.cvtColor(frame2,cv2.COLOR_BGR2GRAY)
+        flow = cv2.calcOpticalFlowFarneback(prev, next, **optflow_params)
+        vfield_img = draw_flow(next, flow)
+        hsv1_img = draw_hsv(flow)
+        hsv2_img = draw_hsv_thresh(flow, flow_threshold)
+
+        ## HOUGH FILTER ##
+        canny = cv2.Canny(next, **canny_params)
+        hough = cv2.HoughLines(canny, **hough_params)
+        if hough is not None:
+            for rho, theta in hough[0]:
+                # only draws vertical lines
+                if theta > np.pi/180*170 or theta < np.pi/180*10:
+                    a = np.cos(theta)
+                    b = np.sin(theta)
+                    x0 = a * rho
+                    y0 = b * rho
+                    x1 = int(x0 + 1000*(-b))
+                    y1 = int(y0 + 1000*(a))
+                    x2 = int(x0 - 1000*(-b))
+                    y2 = int(y0 - 1000*(a))
+                    cv2.line(frame2, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+        ## DISPLAY IMAGES ##
+        # cv2.imshow('Optical Flow Field', vfield_img)
+        # cv2.imshow('Optical Flow HSV', hsv1_img)
+        cv2.imshow('Optical Flow HSV Threshold', hsv2_img)
+        # cv2.imshow('Canny', canny)
+        cv2.imshow('Hough Lines', frame2)
+
+        k = cv2.waitKey(30) & 0xff
+        if k == 27: #escape key
+            break
+        elif k == ord('s'):
+            cv2.imwrite('optflow_field.png',frame2)
+            cv2.imwrite('optflow_hsv.png',rgb)
+        
+        frame1 = frame2
+        prev = next
+
+    cap.release()
+    cv2.destroyAllWindows()
