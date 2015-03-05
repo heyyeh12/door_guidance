@@ -5,7 +5,7 @@ import numpy as np
 
 ## TUNING PARAMETERS ##
 dropped_frames = 5
-group_thresh = 50
+group_thresh = 5
 threshold_params = dict ( thresh = 0,
                           maxval = 100,
                           type = cv2.THRESH_BINARY_INV)
@@ -122,9 +122,9 @@ if __name__ == '__main__':
     cap = cv2.VideoCapture(data)
     ret, frame1 = cap.read()
     prev = cv2.cvtColor(frame1,cv2.COLOR_BGR2GRAY)
-    
+
     while(1):
-        
+
         ## OPTICAL FLOW ##
         for i in range(0, dropped_frames):
             ret, frame2 = cap.read()
@@ -140,7 +140,7 @@ if __name__ == '__main__':
         lines_hough = draw_hough(frame2, hough)
         groups_hough = line_cluster(lines_hough, frame2)
         # print groups_hough
-        
+
         canny = cv2.Canny(hsv2_img, **canny_params)
         hough = cv2.HoughLines(canny, **hough_params)
         lines = draw_hough(hsv2_img, hough)
@@ -159,7 +159,7 @@ if __name__ == '__main__':
         elif k == ord('s'):
             cv2.imwrite('optflow_field.png',frame2)
             cv2.imwrite('optflow_hsv.png',rgb)
-        
+
         prev = next
 
     cap.release()
