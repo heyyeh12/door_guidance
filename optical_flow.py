@@ -4,8 +4,11 @@ import cv2
 import numpy as np
 
 ## TUNING PARAMETERS ##
-dropped_frames = 3
-flow_threshold = 5
+dropped_frames = 5
+group_thresh = 50
+threshold_params = dict ( thresh = 0,
+                          maxval = 100,
+                          type = cv2.THRESH_BINARY_INV)
 optflow_params = dict( pyr_scale = 0.5,
                          levels = 1,
                          winsize = 5,
@@ -13,16 +16,15 @@ optflow_params = dict( pyr_scale = 0.5,
                          poly_n = 7, #or 5
                          poly_sigma = 1.5,
                          flags = 0) #or 1.1
-canny_params = dict( threshold1 = 50,
-                     threshold2 = 150,
+canny_params = dict( threshold1 = 51,
+                     threshold2 = 101,
                      apertureSize = 3,
                      L2gradient = True )
 hough_params = dict( rho = 1,
                      theta = np.pi/180,
                      threshold = 123,
                      srn = 0,
-                     stn = 0
-                     )
+                     stn = 0)
 
 ## DEFAULT OPTICAL FLOW VISUALIZATION ##
 def draw_flow(img, flow, step=16):
@@ -57,16 +59,58 @@ def draw_hsv(flow):
     return bgr
 
 ## CUSTOMIZED FUNCTIONS ##
-def draw_hsv_thresh(flow, thresh):
+def draw_hsv_thresh(flow, params):
     h, w = flow.shape[:2]
     hsv = np.zeros((h, w, 3), np.uint8)
     mag, ang = cv2.cartToPolar(flow[...,0], flow[...,1])
-    hsv[...,0] = 0
-    hsv[...,1] = 0
     hsv[...,2] = cv2.normalize(mag,None,0,100,cv2.NORM_MINMAX)
-    ret, hsv = cv2.threshold(hsv, thresh, 100, cv2.THRESH_BINARY)
-    bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-    return bgr
+    h, s, v = cv2.split(hsv)
+    # v = cv2.GaussianBlur(v, (5,5), 0)
+    ret, new = cv2.threshold(v, **params)
+    return new
+
+def draw_hough(img, hough):
+    lines = []
+    if hough is not None:
+            for rho, theta in hough[0]:
+                # only draws near-vertical lines
+                if theta > np.pi/180*165 or theta < np.pi/180*15:
+                    a = np.cos(theta)
+                    b = np.sin(theta)
+                    x0 = a * rho
+                    y0 = b * rho
+                    x1 = int(x0 + 1000*(-b))
+                    y1 = int(y0 + 1000*(a))
+                    x2 = int(x0 - 1000*(-b))
+                    y2 = int(y0 - 1000*(a))
+                    lines += [(x1+x2)/2]
+                    cv2.line(img, (x1, y1), (x2, y2), (255, 255, 255), 2)
+    return lines
+
+
+def line_cluster(lines, img):
+    groups = []
+    avgs = []
+    for line in lines:
+        diff = []
+        grouped = False
+        for group in groups:
+            group_avg = sum(group)/len(group)
+            diff += [abs(group_avg-line)]
+        if len(diff) is not 0:
+            if min(diff) < group_thresh:
+                groups[diff.index(min(diff))] += [line]
+                grouped = True
+        if not grouped:
+            groups += [[line]]
+    for group in groups:
+        if len(group) is not 0:
+            avg = int(sum(group)/len(group))
+            cv2.line(img, (avg, -1000), (avg, 1000), (0, 255, 0), 2)
+            avgs += [avg]
+    if len(avgs) is not 0:
+        cv2.line(img, (int(sum(avgs)/len(avgs)), -1000), (int(sum(avgs)/len(avgs)), 1000), (255, 0, 0), 2)
+    return groups
 
 if __name__ == '__main__':
 
@@ -88,24 +132,19 @@ if __name__ == '__main__':
         flow = cv2.calcOpticalFlowFarneback(prev, next, **optflow_params)
         vfield_img = draw_flow(next, flow)
         hsv1_img = draw_hsv(flow)
-        hsv2_img = draw_hsv_thresh(flow, flow_threshold)
+        hsv2_img = draw_hsv_thresh(flow, threshold_params)
 
         ## HOUGH FILTER ##
         canny = cv2.Canny(next, **canny_params)
         hough = cv2.HoughLines(canny, **hough_params)
-        if hough is not None:
-            for rho, theta in hough[0]:
-                # only draws vertical lines
-                if theta > np.pi/180*170 or theta < np.pi/180*10:
-                    a = np.cos(theta)
-                    b = np.sin(theta)
-                    x0 = a * rho
-                    y0 = b * rho
-                    x1 = int(x0 + 1000*(-b))
-                    y1 = int(y0 + 1000*(a))
-                    x2 = int(x0 - 1000*(-b))
-                    y2 = int(y0 - 1000*(a))
-                    cv2.line(frame2, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        lines_hough = draw_hough(frame2, hough)
+        groups_hough = line_cluster(lines_hough, frame2)
+        # print groups_hough
+        
+        canny = cv2.Canny(hsv2_img, **canny_params)
+        hough = cv2.HoughLines(canny, **hough_params)
+        lines = draw_hough(hsv2_img, hough)
+        groups = line_cluster(lines, hsv2_img)
 
         ## DISPLAY IMAGES ##
         # cv2.imshow('Optical Flow Field', vfield_img)
@@ -121,7 +160,6 @@ if __name__ == '__main__':
             cv2.imwrite('optflow_field.png',frame2)
             cv2.imwrite('optflow_hsv.png',rgb)
         
-        frame1 = frame2
         prev = next
 
     cap.release()
